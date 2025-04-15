@@ -4,76 +4,24 @@
 #include <stdlib.h>
 
 #include "driver/gpio.h"
-#include "driver/ledc.h"
 #include "esp_afe_sr_iface.h"
 #include "esp_afe_sr_models.h"
 #include "esp_board_init.h"
-#include "esp_log.h"
 #include "esp_mn_iface.h"
 #include "esp_mn_models.h"
 #include "esp_process_sdkconfig.h"
 #include "esp_wn_iface.h"
 #include "esp_wn_models.h"
-#include "led_strip.h"
 #include "model_path.h"
+#include "music.h"
+#include "led.h"
 #include "sdkconfig.h"
-#include "speech_commands_action.h"
-
-#define BUZZER_GPIO 9
-#define LEDC_TIMER LEDC_TIMER_0
-#define LEDC_CHANNEL LEDC_CHANNEL_0
-#define LEDC_MODE LEDC_LOW_SPEED_MODE
-#define LEDC_DUTY_RES LEDC_TIMER_10_BIT // 10-bit resolution
-#define LEDC_FREQUENCY 2000             // Default frequency
-
-#define NOTE_C4 262
-#define NOTE_D4 294
-#define NOTE_E4 330
-#define NOTE_F4 349
-#define NOTE_G4 392
-#define NOTE_A4 440
-#define NOTE_B4 494
-#define NOTE_C5 523
-
-int melody[] = {NOTE_C4, NOTE_D4, NOTE_E4, NOTE_F4,
-                NOTE_G4, NOTE_A4, NOTE_B4, NOTE_C5};
-
-int note_durations[] = {4, 4, 4, 4, 4, 4, 4, 4};
 
 int detect_flag = 0;
 static esp_afe_sr_iface_t *afe_handle = NULL;
 static volatile int task_flag = 0;
 srmodel_list_t *models = NULL;
 static int play_voice = -2;
-
-// led strip configs
-
-static const char *TAG = "example";
-#define BLINK_GPIO 48
-static uint8_t s_led_state = 0;
-#define CONFIG_BLINK_LED_STRIP 1
-static led_strip_handle_t led_strip;
-
-void play_songs();
-
-void play_music(void *arg) {
-  while (task_flag) {
-    switch (play_voice) {
-    case -2:
-      vTaskDelay(10);
-      break;
-    case -1:
-      wake_up_action();
-      play_voice = -2;
-      break;
-    default:
-      speech_commands_action(play_voice);
-      play_voice = -2;
-      break;
-    }
-  }
-  vTaskDelete(NULL);
-}
 
 void feed_Task(void *arg) {
   esp_afe_sr_data_t *afe_data = arg;
@@ -105,8 +53,7 @@ void detect_Task(void *arg) {
   esp_mn_iface_t *multinet = esp_mn_handle_from_name(mn_name);
   model_iface_data_t *model_data = multinet->create(mn_name, 6000);
   int mu_chunksize = multinet->get_samp_chunksize(model_data);
-  esp_mn_commands_update_from_sdkconfig(
-      multinet, model_data); // Add speech commands from sdkconfig
+  esp_mn_commands_update_from_sdkconfig(multinet, model_data);
   assert(mu_chunksize == afe_chunksize);
   // print active speech commands
   multinet->print_active_speech_commands(model_data);
@@ -150,19 +97,23 @@ void detect_Task(void *arg) {
           switch (mn_result->command_id[0]) {
           case 15:
             // ligar luz
-            led_strip_set_pixel(led_strip, 0, 16, 16, 16);
-            led_strip_refresh(led_strip);
+            change_led_color("white");
             break;
           case 16:
             // desligar luz
-            led_strip_clear(led_strip);
+            change_led_color("out");
             break;
           case 17:
-            led_strip_set_pixel(led_strip, 0, 0, 0, 16);
-            led_strip_refresh(led_strip);
+            // luz azul
+            change_led_color("blue");
             break;
           case 18:
+            // tocar musica
             play_songs();
+            break;
+          case 19:
+            // ligar ar condicionado
+            printf("Ligando ar!");
             break;
           default:
             break;
@@ -189,80 +140,17 @@ void detect_Task(void *arg) {
   vTaskDelete(NULL);
 }
 
-static void configure_led(void) {
-  ESP_LOGI(TAG, "Example configured to blink addressable LED!");
-  /* LED strip initialization with the GPIO and pixels number*/
-  led_strip_config_t strip_config = {
-      .strip_gpio_num = BLINK_GPIO,
-      .max_leds = 1, // at least one LED on board
-  };
-  led_strip_rmt_config_t rmt_config = {
-      .resolution_hz = 10 * 1000 * 1000, // 10MHz
-      .flags.with_dma = false,
-  };
-  ESP_ERROR_CHECK(
-      led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip));
-  /* Set all LED off to clear all pixels */
-  led_strip_clear(led_strip);
-}
-
-void play_songs() {
-  // Configure timer
-  ledc_timer_config_t ledc_timer = {.speed_mode = LEDC_MODE,
-                                    .timer_num = LEDC_TIMER,
-                                    .duty_resolution = LEDC_DUTY_RES,
-                                    .freq_hz = LEDC_FREQUENCY,
-                                    .clk_cfg = LEDC_AUTO_CLK};
-  ledc_timer_config(&ledc_timer);
-
-  // Configure channel
-  ledc_channel_config_t ledc_channel = {
-      .speed_mode = LEDC_MODE,
-      .channel = LEDC_CHANNEL,
-      .timer_sel = LEDC_TIMER,
-      .intr_type = LEDC_INTR_DISABLE,
-      .gpio_num = BUZZER_GPIO,
-      .duty = 512, // 50% duty (max is 1023 for 10-bit)
-      .hpoint = 0};
-  ledc_channel_config(&ledc_channel);
-
-  for (int i = 0; i < sizeof(melody) / sizeof(int); i++) {
-    int duration = 1000 / note_durations[i];
-    ledc_set_freq(LEDC_MODE, LEDC_TIMER, melody[i]); // Set note freq
-    ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, 512);     // Start tone
-    ledc_update_duty(LEDC_MODE, LEDC_CHANNEL);
-
-    vTaskDelay(pdMS_TO_TICKS(duration));
-
-    // Silence between notes
-    ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, 0);
-    ledc_update_duty(LEDC_MODE, LEDC_CHANNEL);
-
-    vTaskDelay(pdMS_TO_TICKS(100));
-  }
-}
-
 void app_main() {
-  models =
-      esp_srmodel_init("model"); // partition label defined in partitions.csv
+  models = esp_srmodel_init("model");
   ESP_ERROR_CHECK(esp_board_init(AUDIO_HAL_16K_SAMPLES, 1, 16));
-  // ESP_ERROR_CHECK(esp_sdcard_init("/sdcard", 10));
   configure_led();
-#if defined CONFIG_ESP32_KORVO_V1_1_BOARD
-  led_init();
-#endif
 
-#if CONFIG_IDF_TARGET_ESP32
-  printf("This demo only support ESP32S3\n");
-  return;
-#else
   afe_handle = (esp_afe_sr_iface_t *)&ESP_AFE_SR_HANDLE;
-#endif
 
   afe_config_t afe_config = AFE_CONFIG_DEFAULT();
   afe_config.wakenet_model_name =
       esp_srmodel_filter(models, ESP_WN_PREFIX, NULL);
-  ;
+
 #if defined CONFIG_ESP32_S3_BOX_BOARD || defined CONFIG_ESP32_S3_EYE_BOARD ||  \
     CONFIG_ESP32_S3_DEVKIT_C
   afe_config.aec_init = false;
@@ -272,6 +160,7 @@ void app_main() {
   afe_config.pcm_config.ref_num = 1;
 #endif
 #endif
+
   esp_afe_sr_data_t *afe_data = afe_handle->create_from_config(&afe_config);
 
   task_flag = 1;
@@ -279,20 +168,4 @@ void app_main() {
                           NULL, 1);
   xTaskCreatePinnedToCore(&feed_Task, "feed", 8 * 1024, (void *)afe_data, 5,
                           NULL, 0);
-#if defined CONFIG_ESP32_S3_KORVO_1_V4_0_BOARD
-  xTaskCreatePinnedToCore(&led_Task, "led", 2 * 1024, NULL, 5, NULL, 0);
-#endif
-#if defined CONFIG_ESP32_S3_KORVO_1_V4_0_BOARD ||                              \
-    CONFIG_ESP32_S3_KORVO_2_V3_0_BOARD || CONFIG_ESP32_KORVO_V1_1_BOARD ||     \
-    CONFIG_ESP32_S3_BOX_BOARD
-  xTaskCreatePinnedToCore(&play_music, "play", 4 * 1024, NULL, 5, NULL, 1);
-#endif
-
-  // // You can call afe_handle->destroy to destroy AFE.
-  // task_flag = 0;
-
-  // printf("destroy\n");
-  // afe_handle->destroy(afe_data);
-  // afe_data = NULL;
-  // printf("successful\n");
 }

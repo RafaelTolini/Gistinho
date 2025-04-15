@@ -1,12 +1,14 @@
 set(srcs
     main.c
-    speech_commands_action.c
+    music.c
+    led.c
     )
 
 set(requires
     esp-sr
     led_strip
     hardware_driver
+    mqtt
     )
 
 idf_component_register(SRCS ${srcs}
