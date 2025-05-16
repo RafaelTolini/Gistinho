@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "assert.h"
+#include "connection.h"
 #include "driver/gpio.h"
 #include "esp_afe_sr_iface.h"
 #include "esp_afe_sr_models.h"
@@ -12,9 +14,9 @@
 #include "esp_process_sdkconfig.h"
 #include "esp_wn_iface.h"
 #include "esp_wn_models.h"
+#include "led.h"
 #include "model_path.h"
 #include "music.h"
-#include "led.h"
 #include "sdkconfig.h"
 
 int detect_flag = 0;
@@ -92,8 +94,7 @@ void detect_Task(void *arg) {
               "TOP %d, command_id: %d, phrase_id: %d, string: %s, prob: %f\n",
               i + 1, mn_result->command_id[i], mn_result->phrase_id[i],
               mn_result->string, mn_result->prob[i]);
-        }
-        if (mn_result->num > 0) {
+        }        if (mn_result->num > 0) {
           switch (mn_result->command_id[0]) {
           case 15:
             // ligar luz
@@ -112,8 +113,18 @@ void detect_Task(void *arg) {
             play_songs();
             break;
           case 19:
+          case 20:
+            // ligar ar
             // ligar ar condicionado
             printf("Ligando ar!");
+            manda_mensagem_comando1();
+            break;
+          case 21:
+          case 22:
+            // desligar ar
+            // desligar ar condicionado
+            printf("Desligando ar!");
+            manda_mensagem_comando2();
             break;
           default:
             break;
@@ -141,6 +152,7 @@ void detect_Task(void *arg) {
 }
 
 void app_main() {
+  initialize_mqtt();
   models = esp_srmodel_init("model");
   ESP_ERROR_CHECK(esp_board_init(AUDIO_HAL_16K_SAMPLES, 1, 16));
   configure_led();
@@ -162,6 +174,8 @@ void app_main() {
 #endif
 
   esp_afe_sr_data_t *afe_data = afe_handle->create_from_config(&afe_config);
+
+  //xTaskCreate(&initialize_mqtt, "connect", 8 * 1024, (void *)0, 4, NULL);
 
   task_flag = 1;
   xTaskCreatePinnedToCore(&detect_Task, "detect", 8 * 1024, (void *)afe_data, 5,
